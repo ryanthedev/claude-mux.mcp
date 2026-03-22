@@ -9,7 +9,9 @@
   },
   "files": [
     "server.js",
-    "hooks/"
+    "hooks/",
+    "commands/",
+    ".claude-plugin/"
   ],
   "keywords": [
     "mcp",

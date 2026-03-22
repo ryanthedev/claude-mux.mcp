@@ -1,0 +1,11 @@
+{
+  "name": "claude-mux",
+  "version": "0.5.0",
+  "description": "MCP server for tmux control and multi-agent coordination with Claude Code",
+  "mcpServers": {
+    "tmux": {
+      "command": "bun",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server.js"]
+    }
+  }
+}
