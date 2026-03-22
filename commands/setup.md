@@ -5,21 +5,29 @@ allowed-tools: Bash, Read
 
 Run these checks in order. Fix any issues found. Report a summary at the end.
 
-## 1. Bun runtime
+## 1. Version
+
+Read `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` and extract the version. Print it early so the user knows what's installed:
+
+```
+claude-mux v0.5.0
+```
+
+## 2. Bun runtime
 
 Verify `bun --version` works. claude-mux requires Bun. If missing, tell the user to install Bun: `curl -fsSL https://bun.sh/install | bash`
 
-## 2. tmux
+## 3. tmux
 
 Verify `tmux -V` works. claude-mux requires tmux. If missing, tell the user to install it:
 - macOS: `brew install tmux`
 - Linux: `apt install tmux` or equivalent
 
-## 3. Dependencies
+## 4. Dependencies
 
 Run `bun install` in `${CLAUDE_PLUGIN_ROOT}` to ensure packages are up to date.
 
-## 4. MCP server registration
+## 5. MCP server registration
 
 Check if the tmux MCP server is already registered:
 
@@ -40,7 +48,7 @@ claude mcp remove tmux
 claude mcp add tmux -- bun run ${CLAUDE_PLUGIN_ROOT}/server.js
 ```
 
-## 5. MCP server health
+## 6. MCP server health
 
 Smoke-test the server by sending an initialize request:
 
@@ -50,12 +58,15 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 
 If this returns a valid JSON response with `serverInfo`, the server is healthy. If it fails, read stderr for the error.
 
-## 6. Summary
+## 7. Summary
 
 Report:
+- claude-mux: version from plugin.json
 - Bun: version or missing
 - tmux: version or missing
 - Dependencies: installed / error
 - MCP server: registered + healthy / needs restart
+
+To update: `claude plugin update claude-mux@rtd` (or whichever marketplace it was installed from), then run `/setup` again.
 
 If the MCP server was just registered or updated, tell the user to restart Claude Code for changes to take effect.
