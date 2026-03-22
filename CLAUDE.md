@@ -36,6 +36,7 @@ Everything routes through one MCP tool → `dispatch()` switch statement → ind
 | Worker hooks | `/tmp/claude-mux-{name}/.claude/settings.json` | Cleaned on despawn |
 | Inbox sequence | `/tmp/claude_mux_inbox_{name}` | Cleaned on despawn |
 | Task claim locks | `/tmp/claude_mux_claim_{name}` | Released on complete |
+| Shared task list | `~/.claude/tasks/claude-mux-{session}/` (Tasks API) | Yes (disk) |
 
 ### Key design patterns
 
@@ -44,7 +45,8 @@ Everything routes through one MCP tool → `dispatch()` switch statement → ind
 - **`sendwait`/`typewait`**: Poll every 500ms. Detect completion via prompt regex or 2s quiesce. 30s timeout ceiling.
 - **Self-awareness**: Reads `$TMUX_PANE` on startup, reports `you are here:` in listings so the model avoids reading its own pane.
 - **Worker spawning**: `spawn`/`spawn-persist`/`teammate` all create a new tmux window, register the agent, inject a coordination preamble, and set up inbox hooks. `spawn` auto-closes; `teammate` stays interactive.
-- **Atomic task claiming**: `claim` uses `O_EXCL` file creation (`writeFileSync` with `wx` flag) so two agents racing for the same task can't both win. `complete` releases the lock.
+- **Shared task lists**: Workers get `CLAUDE_CODE_TASK_LIST_ID=claude-mux-{session}` exported in their shell. All workers in the same tmux session share a persistent task list via Claude Code's native Tasks API, enabling dependency chains and atomic claiming without our own lock files.
+- **Atomic task claiming**: `claim` uses `O_EXCL` file creation (`writeFileSync` with `wx` flag) so two agents racing for the same task can't both win. `complete` releases the lock. The native Tasks API also provides file-locked claiming for shared task lists.
 
 ### Hooks
 

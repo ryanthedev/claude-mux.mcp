@@ -627,12 +627,14 @@ function getTeamRoster() {
   return agents;
 }
 
-function coordinationPreamble(workerName) {
+function coordinationPreamble(workerName, session) {
   const roster = getTeamRoster();
   const teammates = roster
     .filter((a) => a.name !== workerName)
     .map((a) => `${a.name} (${a.pane})`)
     .join(", ");
+
+  const tlid = session ? taskListId(session) : null;
 
   return [
     `You are "${workerName}". You are already registered in the tmux coordination system.`,
@@ -646,6 +648,12 @@ function coordinationPreamble(workerName) {
     "- Check inbox when you're blocked or before making assumptions about another service's API",
     "- Post your API contract/interface to 'all' as soon as it's defined, before full implementation",
     "- When done, post a summary of what you built to 'all'",
+    "",
+    "Task management:",
+    `- Your CLAUDE_CODE_TASK_LIST_ID is set to "${tlid}". All workers in this session share this task list.`,
+    "- Use TaskList to see available tasks. Use TaskUpdate to claim (set owner to your name), start (in_progress), and complete tasks.",
+    "- Check TaskList for unassigned tasks when you finish your current work.",
+    "- Tasks may have dependencies (blocked_by). Only work on unblocked tasks.",
     "",
     "Task:",
   ].join("\n");
@@ -687,6 +695,10 @@ function cleanupWorkerHooks(workDir) {
   } catch {}
 }
 
+function taskListId(session) {
+  return `claude-mux-${session}`;
+}
+
 function createWorkerWindow(session, workerName) {
   run("new-window", "-d", "-t", session, "-n", workerName);
 
@@ -698,8 +710,12 @@ function createWorkerWindow(session, workerName) {
 
   run("set-environment", "-g", `${AGENT_PREFIX}${newPane}`, `${workerName}|${Date.now()}`);
 
-  // set the agent name env var in the pane for the inbox hook
-  run("send-keys", "-t", newPane, "-l", `export TMUX_MCP_AGENT_NAME='${workerName}'`);
+  // set agent name + shared task list ID in the pane
+  const exports = [
+    `export TMUX_MCP_AGENT_NAME='${workerName}'`,
+    `export CLAUDE_CODE_TASK_LIST_ID='${taskListId(session)}'`,
+  ].join(" && ");
+  run("send-keys", "-t", newPane, "-l", exports);
   run("send-keys", "-t", newPane, "Enter");
 
   return newPane;
@@ -719,7 +735,7 @@ function spawnWorker(text, target, name) {
   mkdirSync(workDir, { recursive: true });
   setupWorkerHooks(workerName, workDir);
 
-  const preamble = coordinationPreamble(workerName);
+  const preamble = coordinationPreamble(workerName, session);
   const fullPrompt = `${preamble}\n${text}`;
   const escaped = fullPrompt.replace(/'/g, "'\\''");
 
@@ -735,7 +751,7 @@ function spawnWorker(text, target, name) {
   run("send-keys", "-t", newPane, "-l", chain);
   run("send-keys", "-t", newPane, "Enter");
 
-  return `spawned ${workerName} in ${newPane} (one-shot, hooks injected)\ntask: ${text}\ntip: auto-closes when done. worker-result to read output after`;
+  return `spawned ${workerName} in ${newPane} (one-shot, hooks injected)\ntask: ${text}\ntask list: ${taskListId(session)} (shared with all workers in session)\ntip: auto-closes when done. worker-result to read output after`;
 }
 
 function spawnWorkerPersist(text, target, name) {
@@ -751,7 +767,7 @@ function spawnWorkerPersist(text, target, name) {
   mkdirSync(workDir, { recursive: true });
   setupWorkerHooks(workerName, workDir);
 
-  const preamble = coordinationPreamble(workerName);
+  const preamble = coordinationPreamble(workerName, session);
   const fullPrompt = `${preamble}\n${text}`;
   const escaped = fullPrompt.replace(/'/g, "'\\''");
 
@@ -765,7 +781,7 @@ function spawnWorkerPersist(text, target, name) {
   run("send-keys", "-t", newPane, "-l", chain);
   run("send-keys", "-t", newPane, "Enter");
 
-  return `spawned ${workerName} in ${newPane} (persistent, hooks injected)\ntask: ${text}\ntip: window stays open after completion. despawn to clean up`;
+  return `spawned ${workerName} in ${newPane} (persistent, hooks injected)\ntask: ${text}\ntask list: ${taskListId(session)} (shared with all workers in session)\ntip: window stays open after completion. despawn to clean up`;
 }
 
 function spawnTeammate(text, target, name) {
@@ -784,7 +800,7 @@ function spawnTeammate(text, target, name) {
   }
   setupWorkerHooks(workerName, workDir);
 
-  const preamble = coordinationPreamble(workerName);
+  const preamble = coordinationPreamble(workerName, session);
   const fullPrompt = `${preamble}\n${text}`;
   const escaped = fullPrompt.replace(/'/g, "'\\''");
 
@@ -797,7 +813,7 @@ function spawnTeammate(text, target, name) {
   run("send-keys", "-t", newPane, "-l", chain);
   run("send-keys", "-t", newPane, "Enter");
 
-  return `spawned ${workerName} in ${newPane} (interactive, hooks injected)\ntask: ${text}\nhooks: inbox auto-checked every turn\ntip: stays alive. type to send follow-ups, despawn to shut down`;
+  return `spawned ${workerName} in ${newPane} (interactive, hooks injected)\ntask: ${text}\ntask list: ${taskListId(session)} (shared with all workers in session)\nhooks: inbox auto-checked every turn\ntip: stays alive. type to send follow-ups, despawn to shut down`;
 }
 
 function despawnWorker(target) {
@@ -856,12 +872,12 @@ const HELP_TEXT = `tmux actions:
   read  target        capture pane output (lines: history depth, default 100)
   tail  target        last N lines, no pagination (lines: default 20)
   watch target        new output since last read (delta)
-  send  target text   key sequences (space-separated tokens)
-  type  target text   literal text (preserves spaces)
-  sendwait target text  send keys + wait for output
-  typewait target text  type literal text + Enter, wait for output
+  type  target text   literal text — DEFAULT for typing commands and prose
+  typewait target text  type text + Enter, wait for output — DEFAULT for running commands
   exec  target text   run command with tracking (returns commandId)
   result commandId    check tracked command output + exit code
+  send  target text   TUI only: key sequences (space-separated tokens like Escape C-c Enter)
+  sendwait target text  TUI only: send keys + wait for output
   new-session text    create session (text = name)
   kill-session target kill a session
   new-window target   create window (target = session, text = optional name)
@@ -877,11 +893,11 @@ const HELP_TEXT = `tmux actions:
   who                 list all registered agents
   post target text    message an agent or "all" (target = agent name)
   inbox               check new messages
-  claim text          claim a task
-  complete text       mark a task done
-  tasks               list all tasks
+  claim text          claim a tmux-local task (lightweight, no dependencies)
+  complete text       mark a tmux-local task done
+  tasks               list tmux-local tasks
 
-  workers:
+  workers (spawned workers also share a Claude Code Tasks API list per session):
   spawn text          one-shot claude -p worker (auto-closes when done)
   spawn-persist text  one-shot claude -p worker (window stays open)
   teammate text       interactive claude session (stays alive, can coordinate)
@@ -890,6 +906,7 @@ const HELP_TEXT = `tmux actions:
 
   all spawn/teammate accept: text (task), target (session), name (agent name)
 
+prefer type/typewait for most input. use send/sendwait only for TUI key sequences.
 target format: session:window.pane (e.g. main:0.0)
 call any action without required params for help`;
 
@@ -898,26 +915,30 @@ const HELP_ACTIONS = {
   read: "read: capture pane output\n  params: target (session:win.pane), lines (default 100)\n  example: action:read target:main:0.0",
   tail: "tail: last N lines, no pagination — quick look at recent output\n  params: target (session:win.pane), lines (default 20)\n  example: action:tail target:main:0.0 lines:30",
   watch: "watch: delta since last read\n  params: target (session:win.pane), lines (default 100)\n  example: action:watch target:main:0.0",
-  send: `send: key sequences (space-separated tokens)
+  type: `type: literal text — use this by default for typing anything
+  params: target (session:win.pane), text (literal string)
+  preserves spaces. no Enter appended.
+  example: action:type target:main:0.0 text:echo "hello world"
+  tip: follow with send Enter to execute, or use typewait instead`,
+  typewait: `typewait: type text + Enter, wait for output — use this by default for running commands
+  params: target (session:win.pane), text (literal string), lines (default 100)
+  waits up to 30s. detects shell prompt or output quiesce (2s stable)
+  example: action:typewait target:main:0.0 text:npm test`,
+  send: `send: TUI key sequences (space-separated tokens) — only for special keys, not regular text
   params: target (session:win.pane), text (keys)
-  Enter is NOT auto-appended
+  Enter is NOT auto-appended. each space-separated token is a key name.
   examples:
-    shell command:  text:"ls -la Enter"
     interrupt:      text:"C-c"
     TUI navigation: text:"Down Down Enter"
     vim quit:       text:"Escape :q! Enter"
-  special keys: Enter, Escape, Space, Tab, Up, Down, Left, Right, C-c, C-d, C-z, BSpace`,
-  type: `type: literal text (preserves spaces, no Enter appended)
-  params: target (session:win.pane), text (literal string)
-  example: action:type target:main:0.0 text:Hello, how are you?
-  tip: follow with send Enter if needed`,
-  sendwait: `sendwait: send key tokens + wait for completion
+    confirm:        text:"Enter"
+  special keys: Enter, Escape, Space, Tab, Up, Down, Left, Right, C-c, C-d, C-z, BSpace
+  tip: for regular commands and text, use type or typewait instead`,
+  sendwait: `sendwait: send TUI key tokens + wait — only for TUI interactions
   params: target (session:win.pane), text (space-separated keys), lines (default 100)
   waits up to 30s. detects shell prompt or output quiesce (2s stable)
-  example: action:sendwait target:main:0.0 text:npm test Enter`,
-  typewait: `typewait: type literal text + Enter, wait for completion
-  params: target (session:win.pane), text (literal string), lines (default 100)
-  example: action:typewait target:main:0.0 text:echo "hello world"`,
+  example: action:sendwait target:main:0.0 text:Down Down Enter
+  tip: for regular commands, use typewait instead`,
   exec: `exec: run command with marker-based tracking
   params: target (session:win.pane), text (command to run)
   returns a commandId — use 'result' action to check status/output/exit code
@@ -943,9 +964,9 @@ const HELP_ACTIONS = {
   messages work across sessions
   example: action:post target:frontend text:API schema changed, check /sessions`,
   inbox: "inbox: check new messages addressed to you or broadcast\n  no params needed\n  tip: register first so others can reach you by name",
-  claim: "claim: take ownership of a task\n  params: text (task name)\n  example: action:claim text:fix-session-timeouts",
-  complete: "complete: mark a task done\n  params: text (task name)\n  example: action:complete text:fix-session-timeouts",
-  tasks: "tasks: list all tasks with owner and status\n  no params needed",
+  claim: "claim: take ownership of a tmux-local task (lightweight, no dependencies)\n  params: text (task name)\n  example: action:claim text:fix-session-timeouts\n  tip: for structured tasks with dependencies, use Claude's TaskList/TaskUpdate API instead",
+  complete: "complete: mark a tmux-local task done\n  params: text (task name)\n  example: action:complete text:fix-session-timeouts",
+  tasks: "tasks: list tmux-local tasks with owner and status\n  no params needed\n  tip: spawned workers also share a Claude Code Tasks API list per session",
   spawn: `spawn: one-shot claude -p worker, auto-closes when done
   params: text (task), target (optional session), name (optional agent name)
   auto-injects coordination preamble with team roster and messaging protocol
@@ -1070,8 +1091,8 @@ async function dispatch(action, target, text, lines, commandId, name) {
 
 const ALL_ACTIONS = [
   "list", "session", "read", "tail", "watch",
-  "send", "type", "sendwait", "typewait",
-  "exec", "result",
+  "type", "typewait", "exec", "result",
+  "send", "sendwait",
   "new-session", "kill-session", "new-window", "kill-window",
   "split", "kill-pane",
   "rename", "layout",
