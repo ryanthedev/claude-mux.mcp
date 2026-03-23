@@ -21,16 +21,24 @@ const CMD_TTL = 600000; // 10 min
 
 // --- helpers ---
 
-function paginate(text, page = 1, pageSize = PAGE_SIZE) {
+function paginate(text, page = 1, pageSize = PAGE_SIZE, { forward = false } = {}) {
   const lines = text.split("\n");
   if (lines.length <= pageSize) return text;
   const totalPages = Math.ceil(lines.length / pageSize);
   const p = Math.max(1, Math.min(page, totalPages));
-  // page 1 = most recent (bottom), higher pages = older (top)
-  const end = lines.length - (p - 1) * pageSize;
-  const start = Math.max(0, end - pageSize);
+  let start, end;
+  if (forward) {
+    // page 1 = top of output (natural order for listings)
+    start = (p - 1) * pageSize;
+    end = Math.min(lines.length, start + pageSize);
+  } else {
+    // page 1 = bottom of output (newest first, for pane captures)
+    end = lines.length - (p - 1) * pageSize;
+    start = Math.max(0, end - pageSize);
+  }
   const slice = lines.slice(start, end);
-  return `${slice.join("\n")}\n--- page ${p}/${totalPages} (${lines.length} lines, newest first) ---${p < totalPages ? `\ntip: pass page:${p + 1} for older` : ""}`;
+  const order = forward ? "" : ", newest first";
+  return `${slice.join("\n")}\n--- page ${p}/${totalPages} (${lines.length} lines${order}) ---${p < totalPages ? `\ntip: pass page:${p + 1} for more` : ""}`;
 }
 
 function getActivePane() {
@@ -867,7 +875,7 @@ function getLayout() {
 // --- help ---
 
 const HELP_TEXT = `tmux actions:
-  list                overview of all sessions (unnamed ones summarized)
+  list                overview of all sessions (paginated, check all pages)
   session target      inspect one session with pane previews
   read  target        capture pane output (lines: history depth, default 100)
   tail  target        last N lines, no pagination (lines: default 20)
@@ -908,6 +916,7 @@ const HELP_TEXT = `tmux actions:
 
 prefer type/typewait for most input. use send/sendwait only for TUI key sequences.
 target format: session:window.pane (e.g. main:0.0)
+pagination: page and pageSize work on all actions. list/who/tasks paginate forward (page 1 = top). read/watch paginate newest-first (page 1 = bottom).
 call any action without required params for help`;
 
 const HELP_ACTIONS = {
@@ -1110,15 +1119,18 @@ server.tool(
     action: z.enum(ALL_ACTIONS).optional(),
     target: z.string().optional(),
     text: z.string().optional(),
-    lines: z.number().optional(),
-    page: z.number().optional(),
-    pageSize: z.number().optional(),
+    lines: z.union([z.number(), z.string().transform(Number)]).optional(),
+    page: z.union([z.number(), z.string().transform(Number)]).optional(),
+    pageSize: z.union([z.number(), z.string().transform(Number)]).optional(),
     commandId: z.string().optional(),
     name: z.string().optional(),
   },
   async ({ action, target, text, lines, page, pageSize, commandId, name }) => {
+    const p = Number(page) || 1;
+    const ps = Number(pageSize) || PAGE_SIZE;
     const result = await dispatch(action, target, text, lines, commandId, name);
-    return { content: [{ type: "text", text: paginate(result, page, pageSize) }] };
+    const forward = action === "list" || action === "who" || action === "tasks";
+    return { content: [{ type: "text", text: paginate(result, p, ps, { forward }) }] };
   }
 );
 
