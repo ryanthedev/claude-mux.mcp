@@ -877,11 +877,11 @@ function getLayout() {
 const HELP_TEXT = `tmux actions:
   list                overview of all sessions (paginated, check all pages)
   session target      inspect one session with pane previews
-  read  target        capture pane output (lines: history depth, default 100)
-  tail  target        last N lines, no pagination (lines: default 20)
+  tail  target        DEFAULT: quick look at screen (last 20 lines, no pagination)
+  read  target        full history capture (lines: depth, default 100)
   watch target        new output since last read (delta)
-  type  target text   literal text — DEFAULT for typing commands and prose
-  typewait target text  type text + Enter, wait for output — DEFAULT for running commands
+  type  target text   DEFAULT: literal text input — preserves spaces and newlines
+  typewait target text  DEFAULT: type + Enter + wait for output — use for running commands
   exec  target text   run command with tracking (returns commandId)
   result commandId    check tracked command output + exit code
   send  target text   TUI only: key sequences (space-separated tokens like Escape C-c Enter)
@@ -914,7 +914,7 @@ const HELP_TEXT = `tmux actions:
 
   all spawn/teammate accept: text (task), target (session), name (agent name)
 
-prefer type/typewait for most input. use send/sendwait only for TUI key sequences.
+IMPORTANT: prefer type/typewait for most input. send splits text on spaces into separate key tokens — it destroys prose, commands, and anything with spaces or newlines. use send/sendwait ONLY for TUI key sequences (Escape, Enter, C-c, arrow keys).
 target format: session:window.pane (e.g. main:0.0)
 pagination: page and pageSize work on all actions. list/who/tasks paginate forward (page 1 = top). read/watch paginate newest-first (page 1 = bottom).
 call any action without required params for help`;
@@ -933,8 +933,9 @@ const HELP_ACTIONS = {
   params: target (session:win.pane), text (literal string), lines (default 100)
   waits up to 30s. detects shell prompt or output quiesce (2s stable)
   example: action:typewait target:main:0.0 text:npm test`,
-  send: `send: TUI key sequences (space-separated tokens) — only for special keys, not regular text
+  send: `send: TUI key sequences (space-separated tokens) — ONLY for special keys, NEVER for regular text
   params: target (session:win.pane), text (keys)
+  WARNING: splits text on every space. "echo hello" becomes two separate keys "echo" and "hello". use type/typewait for commands and prose.
   Enter is NOT auto-appended. each space-separated token is a key name.
   examples:
     interrupt:      text:"C-c"
@@ -1099,7 +1100,7 @@ async function dispatch(action, target, text, lines, commandId, name) {
 // --- server ---
 
 const ALL_ACTIONS = [
-  "list", "session", "read", "tail", "watch",
+  "list", "session", "tail", "read", "watch",
   "type", "typewait", "exec", "result",
   "send", "sendwait",
   "new-session", "kill-session", "new-window", "kill-window",
@@ -1110,11 +1111,11 @@ const ALL_ACTIONS = [
   "spawn", "spawn-persist", "teammate", "despawn", "worker-result",
 ];
 
-const server = new McpServer({ name: "claude-mux", version: "0.5.0" });
+const server = new McpServer({ name: "claude-mux", version: "0.5.1" });
 
 server.tool(
   "tmux",
-  "Tmux control. Call with no args for usage.",
+  "Tmux control. Use type/typewait to input text (preserves spaces). NEVER use send for regular text — send splits on spaces and destroys input. Use tail to check screen state, read for full history. Call with no args for full usage.",
   {
     action: z.enum(ALL_ACTIONS).optional(),
     target: z.string().optional(),
