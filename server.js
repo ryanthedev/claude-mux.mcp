@@ -314,7 +314,7 @@ function killSession(target) {
 
 function newWindow(target, text) {
   const session = target.split(":")[0];
-  const args = ["new-window", "-t", session, "-P", "-F", "#{session_name}:#{window_index}"];
+  const args = ["new-window", "-t", session, "-P", "-F", "#{session_name}:#{window_index}.#{pane_index}"];
   if (text) args.push("-n", text);
   const result = run(...args);
   if (result === null) return `error: could not create window in '${session}'`;
