@@ -249,7 +249,7 @@ function sendKeys(target, text) {
 
 function typeText(target, text) {
   run("send-keys", "-t", target, "-l", text);
-  return `typed to ${target}: ${text}\ntip: use send to add Enter or other keys after`;
+  return `typed to ${target}: ${text}\ntip: use keys to add Enter or other keys after`;
 }
 
 async function waitForOutput(target, before, lines = 100) {
@@ -314,11 +314,12 @@ function killSession(target) {
 
 function newWindow(target, text) {
   const session = target.split(":")[0];
-  const args = ["new-window", "-t", session];
+  const args = ["new-window", "-t", session, "-P", "-F", "#{session_name}:#{window_index}.#{pane_index}"];
   if (text) args.push("-n", text);
   const result = run(...args);
   if (result === null) return `error: could not create window in '${session}'`;
-  return `created window${text ? ` '${text}'` : ""} in ${session}`;
+  const winTarget = result.trim();
+  return `created window${text ? ` '${text}'` : ""}\ntarget: ${winTarget}`;
 }
 
 function killWindow(target) {
@@ -329,9 +330,10 @@ function killWindow(target) {
 
 function splitPane(target, text) {
   const direction = text === "horizontal" ? "-v" : "-h";
-  const result = run("split-window", direction, "-t", target);
+  const result = run("split-window", direction, "-t", target, "-P", "-F", "#{session_name}:#{window_index}.#{pane_index}");
   if (result === null) return `error: could not split '${target}'`;
-  return `split ${target} ${text || "vertical"}`;
+  const paneTarget = result.trim();
+  return `split ${target} ${text || "vertical"}\ntarget: ${paneTarget}`;
 }
 
 function killPane(target) {
@@ -884,8 +886,8 @@ const HELP_TEXT = `tmux actions:
   typewait target text  DEFAULT: type + Enter + wait for output — use for running commands
   exec  target text   run command with tracking (returns commandId)
   result commandId    check tracked command output + exit code
-  send  target text   TUI only: key sequences (space-separated tokens like Escape C-c Enter)
-  sendwait target text  TUI only: send keys + wait for output
+  keys  target text   TUI only: key sequences (space-separated tokens like Escape C-c Enter)
+  keyswait target text  TUI only: send keys + wait for output
   new-session text    create session (text = name)
   kill-session target kill a session
   new-window target   create window (target = session, text = optional name)
@@ -914,7 +916,7 @@ const HELP_TEXT = `tmux actions:
 
   all spawn/teammate accept: text (task), target (session), name (agent name)
 
-IMPORTANT: prefer type/typewait for most input. send splits text on spaces into separate key tokens — it destroys prose, commands, and anything with spaces or newlines. use send/sendwait ONLY for TUI key sequences (Escape, Enter, C-c, arrow keys).
+IMPORTANT: prefer type/typewait for most input. keys splits text on spaces into separate key tokens — it destroys prose, commands, and anything with spaces or newlines. use keys/keyswait ONLY for TUI key sequences (Escape, Enter, C-c, arrow keys).
 target format: session:window.pane (e.g. main:0.0)
 pagination: page and pageSize work on all actions. list/who/tasks paginate forward (page 1 = top). read/watch paginate newest-first (page 1 = bottom).
 call any action without required params for help`;
@@ -928,12 +930,12 @@ const HELP_ACTIONS = {
   params: target (session:win.pane), text (literal string)
   preserves spaces. no Enter appended.
   example: action:type target:main:0.0 text:echo "hello world"
-  tip: follow with send Enter to execute, or use typewait instead`,
+  tip: follow with keys Enter to execute, or use typewait instead`,
   typewait: `typewait: type text + Enter, wait for output — use this by default for running commands
   params: target (session:win.pane), text (literal string), lines (default 100)
   waits up to 30s. detects shell prompt or output quiesce (2s stable)
   example: action:typewait target:main:0.0 text:npm test`,
-  send: `send: TUI key sequences (space-separated tokens) — ONLY for special keys, NEVER for regular text
+  keys: `keys: TUI key sequences (space-separated tokens) — ONLY for special keys, NEVER for regular text
   params: target (session:win.pane), text (keys)
   WARNING: splits text on every space. "echo hello" becomes two separate keys "echo" and "hello". use type/typewait for commands and prose.
   Enter is NOT auto-appended. each space-separated token is a key name.
@@ -944,15 +946,15 @@ const HELP_ACTIONS = {
     confirm:        text:"Enter"
   special keys: Enter, Escape, Space, Tab, Up, Down, Left, Right, C-c, C-d, C-z, BSpace
   tip: for regular commands and text, use type or typewait instead`,
-  sendwait: `sendwait: send TUI key tokens + wait — only for TUI interactions
+  keyswait: `keyswait: send TUI key tokens + wait — only for TUI interactions
   params: target (session:win.pane), text (space-separated keys), lines (default 100)
   waits up to 30s. detects shell prompt or output quiesce (2s stable)
-  example: action:sendwait target:main:0.0 text:Down Down Enter
+  example: action:keyswait target:main:0.0 text:Down Down Enter
   tip: for regular commands, use typewait instead`,
   exec: `exec: run command with marker-based tracking
   params: target (session:win.pane), text (command to run)
   returns a commandId — use 'result' action to check status/output/exit code
-  better than sendwait for long-running commands
+  better than keyswait for long-running commands
   example: action:exec target:main:0.0 text:npm test`,
   result: `result: check tracked command status
   params: commandId (from exec response)
@@ -994,12 +996,70 @@ const HELP_ACTIONS = {
   "worker-result": "worker-result: read a completed worker's captured output\n  params: text (worker name)\n  example: action:worker-result text:user-service",
 };
 
+// --- param validation ---
+
+const VALID_PARAMS = {
+  list: [],
+  session: ["target"],
+  read: ["target", "lines"],
+  tail: ["target", "lines"],
+  watch: ["target", "lines"],
+  keys: ["target", "text"],
+  type: ["target", "text"],
+  keyswait: ["target", "text", "lines"],
+  typewait: ["target", "text", "lines"],
+  exec: ["target", "text"],
+  result: ["commandId"],
+  "new-session": ["text"],
+  "kill-session": ["target"],
+  "new-window": ["target", "text"],
+  "kill-window": ["target"],
+  split: ["target", "text"],
+  "kill-pane": ["target"],
+  rename: ["target", "text"],
+  layout: [],
+  register: ["text"],
+  unregister: [],
+  who: [],
+  post: ["target", "text"],
+  inbox: [],
+  claim: ["text"],
+  complete: ["text"],
+  tasks: [],
+  spawn: ["text", "target", "name"],
+  "spawn-persist": ["text", "target", "name"],
+  teammate: ["text", "target", "name"],
+  despawn: ["target"],
+  "worker-result": ["text"],
+};
+
+const PARAM_HINTS = {
+  name: 'name is only for worker actions (spawn, spawn-persist, teammate) — did you mean text?',
+  commandId: 'commandId is only for the result action',
+};
+
+function validateParams(action, { target, text, lines, commandId, name }) {
+  const valid = VALID_PARAMS[action];
+  if (!valid) return null;
+  const provided = { target, text, lines, commandId, name };
+  for (const [param, value] of Object.entries(provided)) {
+    if (value !== undefined && !valid.includes(param)) {
+      const hint = PARAM_HINTS[param] || `${param} is not used by ${action}`;
+      return `error: unexpected param "${param}" for ${action}. ${hint}\n\n${HELP_ACTIONS[action] || ""}`;
+    }
+  }
+  return null;
+}
+
 // --- dispatch ---
 
 async function dispatch(action, target, text, lines, commandId, name) {
   if (!action) {
     return selfHeader() + HELP_TEXT;
   }
+
+  const paramError = validateParams(action, { target, text, lines, commandId, name });
+  if (paramError) return paramError;
 
   switch (action) {
     case "list":
@@ -1016,14 +1076,14 @@ async function dispatch(action, target, text, lines, commandId, name) {
     case "watch":
       if (!target) return HELP_ACTIONS.watch;
       return watchPane(target, lines);
-    case "send":
-      if (!target || !text) return HELP_ACTIONS.send;
+    case "keys":
+      if (!target || !text) return HELP_ACTIONS.keys;
       return sendKeys(target, text);
     case "type":
       if (!target || !text) return HELP_ACTIONS.type;
       return typeText(target, text);
-    case "sendwait":
-      if (!target || !text) return HELP_ACTIONS.sendwait;
+    case "keyswait":
+      if (!target || !text) return HELP_ACTIONS.keyswait;
       return await sendWait(target, text, lines);
     case "typewait":
       if (!target || !text) return HELP_ACTIONS.typewait;
@@ -1102,7 +1162,7 @@ async function dispatch(action, target, text, lines, commandId, name) {
 const ALL_ACTIONS = [
   "list", "session", "tail", "read", "watch",
   "type", "typewait", "exec", "result",
-  "send", "sendwait",
+  "keys", "keyswait",
   "new-session", "kill-session", "new-window", "kill-window",
   "split", "kill-pane",
   "rename", "layout",
@@ -1111,20 +1171,20 @@ const ALL_ACTIONS = [
   "spawn", "spawn-persist", "teammate", "despawn", "worker-result",
 ];
 
-const server = new McpServer({ name: "claude-mux", version: "0.5.1" });
+const server = new McpServer({ name: "claude-mux", version: "0.6.0" });
 
 server.tool(
   "tmux",
-  "Tmux control. Use type/typewait to input text (preserves spaces). NEVER use send for regular text — send splits on spaces and destroys input. Use tail to check screen state, read for full history. Call with no args for full usage.",
+  "Tmux control. Workflow: list → see sessions/your pane → act. Use typewait to run commands (types text + Enter + waits). Use type for text without Enter. Use keys ONLY for special keys (Escape, C-c, arrows) — keys splits on spaces. Use tail to check output. new-window returns the target to use. Call with no args for full usage.",
   {
-    action: z.enum(ALL_ACTIONS).optional(),
-    target: z.string().optional(),
-    text: z.string().optional(),
-    lines: z.union([z.number(), z.string().transform(Number)]).optional(),
+    action: z.enum(ALL_ACTIONS).optional().describe("The tmux action to perform"),
+    target: z.string().optional().describe("Pane target as session:window.pane (e.g. myproject:0.0). For new-window: session name. Returned by list, session, new-window."),
+    text: z.string().optional().describe("For type/typewait: literal text to type. For keys/keyswait: space-separated key tokens. For new-window: window name. For new-session: session name."),
+    lines: z.union([z.number(), z.string().transform(Number)]).optional().describe("Number of lines to capture (default varies by action)"),
     page: z.union([z.number(), z.string().transform(Number)]).optional(),
     pageSize: z.union([z.number(), z.string().transform(Number)]).optional(),
-    commandId: z.string().optional(),
-    name: z.string().optional(),
+    commandId: z.string().optional().describe("Command ID returned by exec action"),
+    name: z.string().optional().describe("Agent name for spawn/teammate actions only"),
   },
   async ({ action, target, text, lines, page, pageSize, commandId, name }) => {
     const p = Number(page) || 1;

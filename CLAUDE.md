@@ -4,25 +4,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Single-file MCP server (`server.js`, ~1100 lines) for tmux control and cross-session agent coordination. One tool called `tmux` with 27 actions dispatched via an `action` enum parameter. All responses are plain text, paginated at 50 lines (newest first).
+Single-file MCP server (`server.js`, ~1100 lines) for tmux control and cross-session agent coordination. One tool called `tmux` with 32 actions dispatched via an `action` enum parameter. All responses are plain text, paginated at 50 lines (newest first).
 
 ## Development
 
 ```bash
-npm install                    # only dependency: @modelcontextprotocol/sdk
-node server.js                 # runs via stdio (MCP transport), not HTTP
+bun install                    # only dependency: @modelcontextprotocol/sdk
+bun server.js                  # runs via stdio (MCP transport), not HTTP
 ```
 
 No tests, no linter, no build step. The server is added to Claude's MCP config and communicates over stdin/stdout.
 
 To test locally, configure in `~/.claude.json`:
 ```json
-{ "mcpServers": { "tmux": { "command": "node", "args": ["/path/to/server.js"] } } }
+{ "mcpServers": { "tmux": { "command": "bun", "args": ["/path/to/server.js"] } } }
 ```
 
 ## Architecture
 
-Everything routes through one MCP tool → `dispatch()` switch statement → individual action functions. Help text lives server-side in `HELP_ACTIONS` object, returned only when an action is called with missing params (keeps schema overhead at ~50 tokens).
+Everything routes through one MCP tool → `dispatch()` switch statement → individual action functions. Help text lives server-side in `HELP_ACTIONS` object, returned when an action is called with missing params. `VALID_PARAMS` map enforces which params each action accepts — unexpected params return a corrective hint (e.g. `name` on `new-window` → "did you mean text?").
 
 ### State storage
 
@@ -40,9 +40,9 @@ Everything routes through one MCP tool → `dispatch()` switch statement → ind
 
 ### Key design patterns
 
-- **`send` vs `type`**: `send` splits on spaces (for key sequences like `Escape :q! Enter`). `type` uses tmux `-l` flag for literal text with spaces. Both exist because `send` destroys prose.
+- **`keys` vs `type`**: `keys` splits on spaces (for key sequences like `Escape :q! Enter`). `type` uses tmux `-l` flag for literal text with spaces. Both exist because `keys` destroys prose.
 - **`exec`/`result`**: Wraps commands in `TMUX_MCP_START_{id}` / `TMUX_MCP_DONE_{id}_{exitcode}` markers. Non-blocking. Auto-detects shell (zsh/bash/fish) for exit code variable.
-- **`sendwait`/`typewait`**: Poll every 500ms. Detect completion via prompt regex or 2s quiesce. 30s timeout ceiling.
+- **`keyswait`/`typewait`**: Poll every 500ms. Detect completion via prompt regex or 2s quiesce. 30s timeout ceiling.
 - **Self-awareness**: Reads `$TMUX_PANE` on startup, reports `you are here:` in listings so the model avoids reading its own pane.
 - **Worker spawning**: `spawn`/`spawn-persist`/`teammate` all create a new tmux window, register the agent, inject a coordination preamble, and set up inbox hooks. `spawn` auto-closes; `teammate` stays interactive.
 - **Shared task lists**: Workers get `CLAUDE_CODE_TASK_LIST_ID=claude-mux-{session}` exported in their shell. All workers in the same tmux session share a persistent task list via Claude Code's native Tasks API, enabling dependency chains and atomic claiming without our own lock files.
