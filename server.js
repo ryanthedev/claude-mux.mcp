@@ -996,12 +996,70 @@ const HELP_ACTIONS = {
   "worker-result": "worker-result: read a completed worker's captured output\n  params: text (worker name)\n  example: action:worker-result text:user-service",
 };
 
+// --- param validation ---
+
+const VALID_PARAMS = {
+  list: [],
+  session: ["target"],
+  read: ["target", "lines"],
+  tail: ["target", "lines"],
+  watch: ["target", "lines"],
+  keys: ["target", "text"],
+  type: ["target", "text"],
+  keyswait: ["target", "text", "lines"],
+  typewait: ["target", "text", "lines"],
+  exec: ["target", "text"],
+  result: ["commandId"],
+  "new-session": ["text"],
+  "kill-session": ["target"],
+  "new-window": ["target", "text"],
+  "kill-window": ["target"],
+  split: ["target", "text"],
+  "kill-pane": ["target"],
+  rename: ["target", "text"],
+  layout: [],
+  register: ["text"],
+  unregister: [],
+  who: [],
+  post: ["target", "text"],
+  inbox: [],
+  claim: ["text"],
+  complete: ["text"],
+  tasks: [],
+  spawn: ["text", "target", "name"],
+  "spawn-persist": ["text", "target", "name"],
+  teammate: ["text", "target", "name"],
+  despawn: ["target"],
+  "worker-result": ["text"],
+};
+
+const PARAM_HINTS = {
+  name: 'name is only for worker actions (spawn, spawn-persist, teammate) — did you mean text?',
+  commandId: 'commandId is only for the result action',
+};
+
+function validateParams(action, { target, text, lines, commandId, name }) {
+  const valid = VALID_PARAMS[action];
+  if (!valid) return null;
+  const provided = { target, text, lines, commandId, name };
+  for (const [param, value] of Object.entries(provided)) {
+    if (value !== undefined && !valid.includes(param)) {
+      const hint = PARAM_HINTS[param] || `${param} is not used by ${action}`;
+      return `error: unexpected param "${param}" for ${action}. ${hint}\n\n${HELP_ACTIONS[action] || ""}`;
+    }
+  }
+  return null;
+}
+
 // --- dispatch ---
 
 async function dispatch(action, target, text, lines, commandId, name) {
   if (!action) {
     return selfHeader() + HELP_TEXT;
   }
+
+  const paramError = validateParams(action, { target, text, lines, commandId, name });
+  if (paramError) return paramError;
 
   switch (action) {
     case "list":
