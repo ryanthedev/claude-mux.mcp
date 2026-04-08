@@ -53,7 +53,7 @@ claude mcp add tmux -- bun run ${CLAUDE_PLUGIN_ROOT}/server.js
 Smoke-test the server by sending an initialize request:
 
 ```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"setup","version":"1.0"}}}' | timeout 5 bun run ${CLAUDE_PLUGIN_ROOT}/server.js 2>/dev/null
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"install","version":"1.0"}}}' | timeout 5 bun run ${CLAUDE_PLUGIN_ROOT}/server.js 2>/dev/null
 ```
 
 If this returns a valid JSON response with `serverInfo`, the server is healthy. If it fails, read stderr for the error.

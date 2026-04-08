@@ -9,20 +9,20 @@ Single-file MCP server (`server.js`, ~1100 lines) for tmux control and cross-ses
 ## Development
 
 ```bash
-npm install                    # only dependency: @modelcontextprotocol/sdk
-node server.js                 # runs via stdio (MCP transport), not HTTP
+bun install                    # only dependency: @modelcontextprotocol/sdk
+bun server.js                  # runs via stdio (MCP transport), not HTTP
 ```
 
 No tests, no linter, no build step. The server is added to Claude's MCP config and communicates over stdin/stdout.
 
 To test locally, configure in `~/.claude.json`:
 ```json
-{ "mcpServers": { "tmux": { "command": "node", "args": ["/path/to/server.js"] } } }
+{ "mcpServers": { "tmux": { "command": "bun", "args": ["/path/to/server.js"] } } }
 ```
 
 ## Architecture
 
-Everything routes through one MCP tool → `dispatch()` switch statement → individual action functions. Help text lives server-side in `HELP_ACTIONS` object, returned only when an action is called with missing params (keeps schema overhead at ~50 tokens).
+Everything routes through one MCP tool → `dispatch()` switch statement → individual action functions. Help text lives server-side in `HELP_ACTIONS` object, returned when an action is called with missing params. `VALID_PARAMS` map enforces which params each action accepts — unexpected params return a corrective hint (e.g. `name` on `new-window` → "did you mean text?").
 
 ### State storage
 
