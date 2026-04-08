@@ -1,6 +1,6 @@
 {
   "name": "claude-mux-mcp",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "MCP server for tmux control and multi-agent coordination with Claude Code",
   "type": "module",
   "main": "server.js",

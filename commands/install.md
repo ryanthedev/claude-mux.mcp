@@ -10,7 +10,7 @@ Run these checks in order. Fix any issues found. Report a summary at the end.
 Read `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` and extract the version. Print it early so the user knows what's installed:
 
 ```
-claude-mux v0.5.0
+claude-mux v0.6.0
 ```
 
 ## 2. Bun runtime
@@ -67,6 +67,6 @@ Report:
 - Dependencies: installed / error
 - MCP server: registered + healthy / needs restart
 
-To update: `claude plugin update claude-mux@rtd` (or whichever marketplace it was installed from), then run `/setup` again.
+To update: `claude plugin update claude-mux@rtd` (or whichever marketplace it was installed from), then run `/install` again.
 
 If the MCP server was just registered or updated, tell the user to restart Claude Code for changes to take effect.
