@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { execFileSync } from "child_process";
 import { randomUUID } from "crypto";
-import { mkdirSync, writeFileSync, readFileSync, rmSync, unlinkSync } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, unlinkSync, readdirSync, statSync } from "fs";
 import { dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -874,6 +874,257 @@ function getLayout() {
   return out.filter(Boolean).join("\n");
 }
 
+// --- transcript ---
+// Reads the clean conversation JSONL Claude Code writes to
+// ~/.claude/projects/<cwd-slug>/<sessionId>.jsonl — far cleaner than scraping
+// rendered tmux scrollback. The on-disk schema is undocumented and version-unstable,
+// so everything here is defensive: validate at the file/tmux boundary, skip unknown
+// records/blocks, and never throw out of dispatch.
+
+const PROJECTS_ROOT = `${process.env.HOME}/.claude/projects`;
+
+// cwd -> project dir name. Verified against real dirs: both "/" and "." (and any
+// non-alphanumeric) become "-"; case is preserved (theGrid -> -Users-r-repos-theGrid).
+function cwdSlug(cwd) {
+  return cwd.replace(/[^A-Za-z0-9]/g, "-");
+}
+
+function shortId(id) {
+  return id.slice(0, 8);
+}
+
+function fmtMtime(ms) {
+  // local, second-free: "2026-06-18 14:03"
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// Resolve a pane target to its project dir. Returns {dir, cwd} or an "error: …" string.
+function projectDirFor(target) {
+  const cwd = run("display-message", "-t", target, "-p", "#{pane_current_path}");
+  if (!cwd) return `error: cannot resolve cwd for ${target}`;
+  const dir = `${PROJECTS_ROOT}/${cwdSlug(cwd)}`;
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return `error: no transcripts for ${cwd}`;
+  }
+  if (!entries.some((e) => e.endsWith(".jsonl"))) {
+    return `error: no transcripts for ${cwd}`;
+  }
+  return { dir, cwd };
+}
+
+// Enumerate *.jsonl in a project dir, newest mtime first.
+// Returns [{file, id, mtime}] (mtime in ms). Unstattable files are skipped.
+function listSessionFiles(dir) {
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const files = [];
+  for (const name of entries) {
+    if (!name.endsWith(".jsonl")) continue;
+    const file = `${dir}/${name}`;
+    let mtime;
+    try {
+      mtime = statSync(file).mtimeMs;
+    } catch {
+      continue;
+    }
+    files.push({ file, id: name.slice(0, -".jsonl".length), mtime });
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+  return files;
+}
+
+const CMD_WRAPPERS = /^<(command-name|command-message|command-args|local-command-stdout|local-command-stderr)>|^<system-reminder>/;
+
+// Is this a plain user prompt (not a slash-command expansion / system reminder)?
+function isPlainUserPrompt(s) {
+  return typeof s === "string" && s.trim() !== "" && !CMD_WRAPPERS.test(s.trim());
+}
+
+// Extract a one-line preview for a session file: ai-title || first plain prompt || "(no title)".
+// Defensive: malformed lines skipped; reads the whole file once.
+function sessionPreview(file) {
+  let text;
+  try {
+    text = readFileSync(file, "utf-8");
+  } catch {
+    return "(unreadable)";
+  }
+  let firstPrompt = null;
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let o;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (o?.type === "ai-title" && typeof o.aiTitle === "string" && o.aiTitle.trim()) {
+      return o.aiTitle.trim();
+    }
+    if (firstPrompt === null && o?.type === "user") {
+      const c = o.message?.content;
+      if (isPlainUserPrompt(c)) {
+        firstPrompt = c.trim();
+      } else if (Array.isArray(c)) {
+        const t = c.find((b) => b?.type === "text" && isPlainUserPrompt(b.text));
+        if (t) firstPrompt = t.text.trim();
+      }
+    }
+  }
+  if (firstPrompt) return firstPrompt.replace(/\s+/g, " ").slice(0, 80);
+  return "(no title)";
+}
+
+// Render the newest-first numbered session list for a project dir.
+function transcriptList(dir, cwd) {
+  const files = listSessionFiles(dir);
+  if (files.length === 0) return `error: no transcripts for ${cwd}`;
+  const out = [`transcripts for ${cwd} (${files.length}, newest first):`];
+  files.forEach((f, i) => {
+    const mark = i === 0 ? "  (likely you / current — mtime heuristic)" : "";
+    out.push(`${i + 1}) ${shortId(f.id)}  ${fmtMtime(f.mtime)}  ${sessionPreview(f.file)}${mark}`);
+  });
+  out.push("", "tip: read one with name:<index> or name:<sessionId-prefix>");
+  return out.join("\n");
+}
+
+// Resolve a selector (1-based index or full/prefix sessionId) against the
+// newest-first file list. Returns {file} or an "error: …" string.
+function selectSession(files, selector) {
+  if (/^\d+$/.test(selector)) {
+    const idx = parseInt(selector, 10);
+    if (idx < 1 || idx > files.length) {
+      return `error: index ${idx} out of range (valid 1-${files.length})`;
+    }
+    return { file: files[idx - 1].file };
+  }
+  const matches = files.filter((f) => f.id.startsWith(selector));
+  if (matches.length === 0) {
+    return `error: no session matches "${selector}". candidates: ${files.map((f) => shortId(f.id)).join(", ")}`;
+  }
+  if (matches.length > 1) {
+    return `error: "${selector}" is ambiguous. candidates: ${matches.map((f) => shortId(f.id)).join(", ")}`;
+  }
+  return { file: matches[0].file };
+}
+
+// One tool_use block -> one breadcrumb line.
+function breadcrumb(toolName, input) {
+  const i = input || {};
+  const base = (p) => (typeof p === "string" ? p.split("/").pop() : "?");
+  switch (toolName) {
+    case "Bash":
+      return `[ran: ${String(i.command ?? "").replace(/\s+/g, " ").slice(0, 60)}]`;
+    case "Edit":
+      return `[edited ${base(i.file_path)}]`;
+    case "Write":
+      return `[wrote ${base(i.file_path)}]`;
+    case "Read":
+      return `[read ${base(i.file_path)}]`;
+    case "mcp__claude-mux__tmux":
+      return `[tmux ${i.action ?? "?"} ${i.target ?? ""}`.trimEnd() + "]";
+    case "Agent":
+      return `[dispatched agent: ${String(i.description ?? "").slice(0, 60)}]`;
+    case "AskUserQuestion":
+      return "[asked user]";
+    default:
+      return `[${toolName}]`;
+  }
+}
+
+const DROP_RECORD_TYPES = new Set([
+  "mode", "permission-mode", "last-prompt", "file-history-snapshot",
+  "attachment", "system", "summary", "ai-title",
+]);
+
+function collapseImages(s) {
+  return s.replace(/\[Image[^\]]*\]/g, "[image]");
+}
+
+// Read + flatten a session file to prose + breadcrumbs, NEWEST FIRST.
+// Returns the flattened text or an "error: …" string. Skips malformed lines and
+// unknown record/block types silently — a single bad line never aborts the read.
+function flattenSession(file) {
+  let text;
+  try {
+    text = readFileSync(file, "utf-8");
+  } catch {
+    return `error: cannot read ${file}`;
+  }
+  const lines = [];
+  for (const raw of text.split("\n")) {
+    if (!raw.trim()) continue;
+    let o;
+    try {
+      o = JSON.parse(raw);
+    } catch {
+      continue; // skip malformed line, keep going
+    }
+    const type = o?.type;
+    if (!type || DROP_RECORD_TYPES.has(type)) continue;
+
+    if (type === "user") {
+      const c = o.message?.content;
+      if (typeof c === "string") {
+        if (isPlainUserPrompt(c)) lines.push(`user: ${collapseImages(c.trim())}`);
+        continue;
+      }
+      if (Array.isArray(c)) {
+        for (const b of c) {
+          if (b?.type === "text" && isPlainUserPrompt(b.text)) {
+            lines.push(`user: ${collapseImages(b.text.trim())}`);
+          }
+          // tool_result and other user blocks are dropped
+        }
+      }
+      continue;
+    }
+
+    if (type === "assistant") {
+      const c = o.message?.content;
+      if (!Array.isArray(c)) continue;
+      for (const b of c) {
+        if (b?.type === "text" && b.text?.trim()) {
+          lines.push(`assistant: ${collapseImages(b.text.trim())}`);
+        } else if (b?.type === "tool_use") {
+          lines.push(breadcrumb(b.name, b.input));
+        }
+        // thinking and unknown blocks are dropped
+      }
+      continue;
+    }
+    // unknown record type: skip silently
+  }
+  if (lines.length === 0) return "(empty transcript)";
+  lines.reverse(); // newest first
+  return lines.join("\n");
+}
+
+// Entry point. name absent -> list mode; present -> read mode.
+function transcriptAction(target, name) {
+  const resolved = projectDirFor(target);
+  if (typeof resolved === "string") return resolved; // error
+  const { dir, cwd } = resolved;
+
+  if (name === undefined || name === null || name === "") {
+    return transcriptList(dir, cwd);
+  }
+  const files = listSessionFiles(dir);
+  if (files.length === 0) return `error: no transcripts for ${cwd}`;
+  const picked = selectSession(files, String(name));
+  if (typeof picked === "string") return picked; // error
+  return flattenSession(picked.file);
+}
+
 // --- help ---
 
 const HELP_TEXT = `tmux actions:
@@ -882,6 +1133,7 @@ const HELP_TEXT = `tmux actions:
   tail  target        DEFAULT: quick look at screen (last 20 lines, no pagination)
   read  target        full history capture (lines: depth, default 100)
   watch target        new output since last read (delta)
+  transcript target   prior-session conversation from disk (clean, not scrollback). name: session index/id to read one
   type  target text   DEFAULT: literal text input — preserves spaces and newlines
   typewait target text  DEFAULT: type + Enter + wait for output — use for running commands
   exec  target text   run command with tracking (returns commandId)
@@ -923,8 +1175,14 @@ call any action without required params for help`;
 
 const HELP_ACTIONS = {
   session: "session: inspect one session with pane previews\n  params: target (session name)\n  example: action:session target:main",
-  read: "read: capture pane output\n  params: target (session:win.pane), lines (default 100)\n  example: action:read target:main:0.0",
-  tail: "tail: last N lines, no pagination — quick look at recent output\n  params: target (session:win.pane), lines (default 20)\n  example: action:tail target:main:0.0 lines:30",
+  read: "read: capture pane output\n  params: target (session:win.pane), lines (default 100)\n  example: action:read target:main:0.0\n  note: this is rendered scrollback, NOT the conversation. to recover prior-session work, use action:transcript (reads the clean JSONL on disk).",
+  tail: "tail: last N lines, no pagination — quick look at recent output\n  params: target (session:win.pane), lines (default 20)\n  example: action:tail target:main:0.0 lines:30\n  note: this is rendered scrollback, NOT the conversation. to recover prior-session work, use action:transcript (reads the clean JSONL on disk).",
+  transcript: `transcript: prior-session conversation, read from Claude's clean JSONL on disk (not noisy tmux scrollback)
+  params: target (pane — resolves its cwd), name (optional: session index from the list, or a sessionId/prefix)
+  no name -> lists the cwd's sessions newest-first with a title preview; row 1 is the likely caller (mtime heuristic)
+  with name -> reads that session as flattened user/assistant prose + action breadcrumbs, newest first, paginated
+  example: action:transcript target:main:0.0           (list)
+  example: action:transcript target:main:0.0 name:2    (read 2nd-newest)`,
   watch: "watch: delta since last read\n  params: target (session:win.pane), lines (default 100)\n  example: action:watch target:main:0.0",
   type: `type: literal text — use this by default for typing anything
   params: target (session:win.pane), text (literal string)
@@ -1004,6 +1262,7 @@ const VALID_PARAMS = {
   read: ["target", "lines"],
   tail: ["target", "lines"],
   watch: ["target", "lines"],
+  transcript: ["target", "name", "lines"],
   keys: ["target", "text"],
   type: ["target", "text"],
   keyswait: ["target", "text", "lines"],
@@ -1034,7 +1293,7 @@ const VALID_PARAMS = {
 };
 
 const PARAM_HINTS = {
-  name: 'name is only for worker actions (spawn, spawn-persist, teammate) — did you mean text?',
+  name: 'name is the agent name for spawn/spawn-persist/teammate, or a session index/id for transcript — did you mean text?',
   commandId: 'commandId is only for the result action',
 };
 
@@ -1076,6 +1335,9 @@ async function dispatch(action, target, text, lines, commandId, name) {
     case "watch":
       if (!target) return HELP_ACTIONS.watch;
       return watchPane(target, lines);
+    case "transcript":
+      if (!target) return HELP_ACTIONS.transcript;
+      return transcriptAction(target, name);
     case "keys":
       if (!target || !text) return HELP_ACTIONS.keys;
       return sendKeys(target, text);
@@ -1160,7 +1422,7 @@ async function dispatch(action, target, text, lines, commandId, name) {
 // --- server ---
 
 const ALL_ACTIONS = [
-  "list", "session", "tail", "read", "watch",
+  "list", "session", "tail", "read", "watch", "transcript",
   "type", "typewait", "exec", "result",
   "keys", "keyswait",
   "new-session", "kill-session", "new-window", "kill-window",
@@ -1184,7 +1446,7 @@ server.tool(
     page: z.union([z.number(), z.string().transform(Number)]).optional(),
     pageSize: z.union([z.number(), z.string().transform(Number)]).optional(),
     commandId: z.string().optional().describe("Command ID returned by exec action"),
-    name: z.string().optional().describe("Agent name for spawn/teammate actions only"),
+    name: z.string().optional().describe("Agent name for spawn/spawn-persist/teammate, or a session index/id for transcript."),
   },
   async ({ action, target, text, lines, page, pageSize, commandId, name }) => {
     const p = Number(page) || 1;
@@ -1195,5 +1457,15 @@ server.tool(
   }
 );
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+// Exported for the standalone smoke script. Importing this module must NOT start
+// the stdio transport, so the bootstrap is guarded by import.meta.main.
+export {
+  cwdSlug, projectDirFor, listSessionFiles, sessionPreview, transcriptList,
+  selectSession, breadcrumb, flattenSession, transcriptAction, dispatch,
+  HELP_ACTIONS, VALID_PARAMS, ALL_ACTIONS, PARAM_HINTS,
+};
+
+if (import.meta.main) {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
