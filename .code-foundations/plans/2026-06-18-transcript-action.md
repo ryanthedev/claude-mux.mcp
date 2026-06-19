@@ -1,9 +1,9 @@
 # Plan: `transcript` action for claude-mux
 
 **Created:** 2026-06-18
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-06-18
-**Current Phase:** 1
+**Completed:** 2026-06-18
 **Complexity:** simple
 
 ---
@@ -92,4 +92,10 @@ Seeded from `.code-foundations/research/2026-06-18-transcript-action.md` (confir
 ---
 
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Implement the `transcript` action (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: Verification passed (independent post-gate, all 6 DW + 7 edge cases, 62/62 smoke checks)
+- [x] Committed
+Commit: f1d6a56
+Summary: Added the `transcript` action to server.js — list mode (pane→cwd→project dir, sessions newest-first with ai-title/prompt preview, caller marked) and read mode (select by index or sessionId, flatten to prose + tool_use breadcrumbs dropping tool_result/thinking/command noise, paginated newest-first). Reuses `name` as selector; bootstrap guarded behind `import.meta.main` so helpers are importable. Slug rule corrected to non-alphanumeric→`-` (verified against 4 real dirs). Verified by `scripts/smoke-transcript.mjs`.

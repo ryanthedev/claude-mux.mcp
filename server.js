@@ -1433,7 +1433,7 @@ const ALL_ACTIONS = [
   "spawn", "spawn-persist", "teammate", "despawn", "worker-result",
 ];
 
-const server = new McpServer({ name: "claude-mux", version: "0.6.0" });
+const server = new McpServer({ name: "claude-mux", version: "0.7.0" });
 
 server.tool(
   "tmux",

@@ -4,15 +4,28 @@ MCP server for tmux. Gives Claude Code terminal control and multi-agent coordina
 
 ## Install
 
-As a Claude Code plugin:
-
 ```bash
 claude plugin add claude-mux@rtd
 ```
 
-Then run `/install` to verify bun and tmux are available.
+Then run `/install` inside Claude Code to verify dependencies and register the MCP server. It checks for bun and tmux, installs packages, and smoke-tests the server.
 
-Or manually — add to `~/.claude.json`:
+To update:
+
+```bash
+claude plugin update claude-mux@rtd
+```
+
+Then run `/install` again to verify everything is current.
+
+### Requirements
+
+- [tmux](https://github.com/tmux/tmux) — `brew install tmux` on macOS, `apt install tmux` on Linux
+- [Bun](https://bun.sh) — `curl -fsSL https://bun.sh/install | bash`
+
+### Manual install (development)
+
+If you're working on the server itself, add to `~/.claude.json`:
 
 ```json
 {
@@ -25,8 +38,6 @@ Or manually — add to `~/.claude.json`:
 }
 ```
 
-Requires tmux and bun.
-
 ## Actions
 
 ### Observe
@@ -38,6 +49,7 @@ Requires tmux and bun.
 | `read` | Capture pane output. `lines` sets history depth (default 100). |
 | `tail` | Last N lines, no pagination. Quick look at what just happened. |
 | `watch` | Delta since last read. Only new lines come back. |
+| `transcript` | Read a pane's prior Claude Code sessions from the on-disk JSONL — not scrollback. No `name`: lists the cwd's sessions newest-first with a title preview. With `name` (list index or session id): the flattened conversation, tool calls reduced to one-line breadcrumbs. |
 | `layout` | Every pane across all sessions with dimensions and running process. |
 
 ### Act
