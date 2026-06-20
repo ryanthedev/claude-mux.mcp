@@ -189,6 +189,33 @@ function inspectSession(target) {
   return out.filter(Boolean).join("\n");
 }
 
+// --- meta ---
+// Authoritative machine-parseable session/window metadata. Additive; never
+// touches list/session output. Pure formatter takes the two raw `run()` strings
+// (or null) so it is testable with synthetic tmux -F output. TAB is the sole
+// delimiter; the row-type letter at column 0 lets consumers ignore footer/tips.
+
+const META_SESSION_FORMAT =
+  "S\t#{session_name}\t#{session_activity}\t#{session_attached}\t#{session_created}";
+const META_WINDOW_FORMAT =
+  "W\t#{session_name}\t#{window_index}\t#{window_name}\t#{window_activity}\t#{?window_active,1,0}";
+
+function formatMeta(sessionsRaw, windowsRaw) {
+  if (!sessionsRaw) return "error: no tmux sessions";
+  const sRows = sessionsRaw.split("\n").filter((l) => l.startsWith("S\t"));
+  if (sRows.length === 0) return "error: no tmux sessions";
+  const wRows = windowsRaw
+    ? windowsRaw.split("\n").filter((l) => l.startsWith("W\t"))
+    : [];
+  return [...sRows, ...wRows].join("\n");
+}
+
+function metaAction() {
+  const sessionsRaw = run("list-sessions", "-F", META_SESSION_FORMAT);
+  const windowsRaw = run("list-windows", "-a", "-F", META_WINDOW_FORMAT);
+  return formatMeta(sessionsRaw, windowsRaw);
+}
+
 function readPane(target, lines = 100) {
   const output = run("capture-pane", "-t", target, "-p", "-S", `-${lines}`);
   if (output === null) return `error: cannot read ${target}`;
@@ -1148,6 +1175,7 @@ const HELP_TEXT = `tmux actions:
   kill-pane target    kill a pane
   rename target text  rename a window
   layout              all panes with sizes and commands
+  meta                machine-parseable session+window metadata (tab-delimited S/W rows; for dashboards)
 
   coordination (cross-session):
   register text       identify yourself by name
@@ -1183,6 +1211,13 @@ const HELP_ACTIONS = {
   with name -> reads that session as flattened user/assistant prose + action breadcrumbs, newest first, paginated
   example: action:transcript target:main:0.0           (list)
   example: action:transcript target:main:0.0 name:2    (read 2nd-newest)`,
+  meta: `meta: authoritative machine-parseable session + window metadata (no params)
+  tab-delimited, one row per line, row-type letter in column 0:
+    S\\t<session_name>\\t<session_activity>\\t<session_attached>\\t<session_created>
+    W\\t<session_name>\\t<window_index>\\t<window_name>\\t<window_activity>\\t<window_active 0|1>
+  epochs are raw seconds; session_attached is the raw client count (>0 = attached).
+  every session (named AND numbered) gets an S row; every window a W row. TAB is the only delimiter.
+  example: action:meta`,
   watch: "watch: delta since last read\n  params: target (session:win.pane), lines (default 100)\n  example: action:watch target:main:0.0",
   type: `type: literal text — use this by default for typing anything
   params: target (session:win.pane), text (literal string)
@@ -1277,6 +1312,7 @@ const VALID_PARAMS = {
   "kill-pane": ["target"],
   rename: ["target", "text"],
   layout: [],
+  meta: [],
   register: ["text"],
   unregister: [],
   who: [],
@@ -1338,6 +1374,8 @@ async function dispatch(action, target, text, lines, commandId, name) {
     case "transcript":
       if (!target) return HELP_ACTIONS.transcript;
       return transcriptAction(target, name);
+    case "meta":
+      return metaAction();
     case "keys":
       if (!target || !text) return HELP_ACTIONS.keys;
       return sendKeys(target, text);
@@ -1427,13 +1465,13 @@ const ALL_ACTIONS = [
   "keys", "keyswait",
   "new-session", "kill-session", "new-window", "kill-window",
   "split", "kill-pane",
-  "rename", "layout",
+  "rename", "layout", "meta",
   "register", "unregister", "who", "post", "inbox",
   "claim", "complete", "tasks",
   "spawn", "spawn-persist", "teammate", "despawn", "worker-result",
 ];
 
-const server = new McpServer({ name: "claude-mux", version: "0.7.0" });
+const server = new McpServer({ name: "claude-mux", version: "0.8.0" });
 
 server.tool(
   "tmux",
@@ -1452,7 +1490,7 @@ server.tool(
     const p = Number(page) || 1;
     const ps = Number(pageSize) || PAGE_SIZE;
     const result = await dispatch(action, target, text, lines, commandId, name);
-    const forward = action === "list" || action === "who" || action === "tasks";
+    const forward = action === "list" || action === "who" || action === "tasks" || action === "meta";
     return { content: [{ type: "text", text: paginate(result, p, ps, { forward }) }] };
   }
 );
@@ -1462,6 +1500,7 @@ server.tool(
 export {
   cwdSlug, projectDirFor, listSessionFiles, sessionPreview, transcriptList,
   selectSession, breadcrumb, flattenSession, transcriptAction, dispatch,
+  formatMeta, metaAction,
   HELP_ACTIONS, VALID_PARAMS, ALL_ACTIONS, PARAM_HINTS,
 };
 
