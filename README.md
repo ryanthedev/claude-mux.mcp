@@ -51,6 +51,7 @@ If you're working on the server itself, add to `~/.claude.json`:
 | `watch` | Delta since last read. Only new lines come back. |
 | `transcript` | Read a pane's prior Claude Code sessions from the on-disk JSONL — not scrollback. No `name`: lists the cwd's sessions newest-first with a title preview. With `name` (list index or session id): the flattened conversation, tool calls reduced to one-line breadcrumbs. |
 | `layout` | Every pane across all sessions with dimensions and running process. |
+| `meta` | Authoritative machine-parseable metadata for dashboards (no params). Tab-delimited rows, row-type letter in column 0 — one `S` row per session (named **and** numbered, no collapsing) and one `W` row per window. `S\t<session_name>\t<session_activity>\t<session_attached>\t<session_created>`; `W\t<session_name>\t<window_index>\t<window_name>\t<window_activity>\t<window_active 0\|1>`. Epochs are raw seconds; `session_attached` is the raw client count (`>0` = attached). TAB is the sole delimiter (window names may contain spaces and `:`). |
 
 ### Act
 
